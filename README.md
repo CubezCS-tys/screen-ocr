@@ -2,8 +2,8 @@
 
 # ScreenOCR
 
-**Grab any text on your screen with a shortcut, and paste it anywhere.**<br>
-Made for people who work in SSH sessions and terminal tools like Claude Code.
+**Grab any text on your screen with a shortcut. Claude reads it exactly, and you paste it anywhere.**<br>
+Made for people who work in SSH sessions and terminal tools like Claude Code. Uses your Claude Code subscription, no API key.
 
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE)
@@ -36,60 +36,34 @@ If you work in a remote terminal on Windows (SSH, WSL, tmux, Claude Code running
 </tr>
 </table>
 
-Press <kbd>Esc</kbd> or right-click to cancel a grab. The blue **Aa** icon in the system tray does the same: left-click it to grab, or right-click it for both modes.
+Press <kbd>Esc</kbd> or right-click to cancel a grab. You can also left-click the blue **Aa** icon in the system tray to grab.
 
-## Two modes
+## Why Claude?
 
-<table>
-<tr>
-<th width="50%">🎯 Exact (default) &nbsp; <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd></th>
-<th width="50%">⚡ Fast, offline &nbsp; <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd></th>
-</tr>
-<tr>
-<td>
+- **Exact.** A single wrong character breaks a command. Claude got every test command right, including hashes, API keys, quotes and `|`, `~`, `$(...)`, which classic OCR engines regularly get wrong. In our tests, Windows' built-in OCR got only 27% of shell commands exactly right.
+- **Fast enough.** About **2–4 seconds** per grab.
+- **No API key, no per-grab cost.** It runs through `claude -p`, Claude Code's official non-interactive mode, on your existing subscription. Each grab counts toward your plan's usage like a small Claude Code message.
 
-- **Claude** reads it through your **Claude Code subscription**
-- About **2–4 seconds**
-- **No API key**, no per-grab cost
-- Exact in all our tests, including hashes, keys and quotes
-- The grabbed image is sent to Anthropic
-
-</td>
-<td>
-
-- Uses the **OCR engine built into Windows**
-- About **1 second**
-- **Never leaves your PC**
-- Good on prose, tables and logs
-- Can misread symbols in commands (`l`/`1`/`|`, `0`/`O`)
-
-</td>
-</tr>
-</table>
-
-> [!TIP]
-> **Exact mode is the default because a single wrong character breaks a command.** In our tests, fast mode got only 27% of shell commands exactly right (about 91% of individual characters), while exact mode got every test command right. Use fast mode when you're offline, out of Claude usage, or grabbing something private.
+> [!NOTE]
+> The grabbed image is sent to Anthropic, like anything else you send to Claude. Think twice before grabbing passwords or secrets.
 
 ```mermaid
 flowchart LR
-    A["⌨️ Shortcut"] --> B["🖱️ Drag a box"]
-    B --> C{"Which mode?"}
-    C -->|"🎯 Exact"| E["claude -p in WSL<br>(your subscription)"]
-    C -->|"⚡ Fast"| D["Windows OCR<br>+ terminal clean-up"]
-    D --> F["📋 Clipboard"]
-    E --> F
-    F --> G["Paste anywhere"]
+    A["⌨️ Ctrl+Alt+L"] --> B["🖱️ Drag a box"]
+    B --> C["claude -p in WSL<br>(your subscription)"]
+    C --> D["📋 Clipboard"]
+    D --> E["Paste anywhere"]
 ```
 
 ## Install
 
 > [!NOTE]
-> **Requirements:** Windows 10 or 11. Fast mode needs nothing else.<br>
-> Exact mode also needs [Claude Code](https://code.claude.com) installed and logged in **inside WSL** (your default distro). Check by running `claude -p "say hi"` in WSL. It should answer without asking you to log in.
+> **Requirements:** Windows 10 or 11, and [Claude Code](https://code.claude.com) installed and logged in **inside WSL** (your default distro).<br>
+> Check by running `claude -p "say hi"` in WSL. It should answer without asking you to log in.
 
 1. **Download** this repo: **Code → Download ZIP**, or clone it.
 2. **Put the folder on your Windows drive**, e.g. `C:\Users\<you>\ScreenOCR`. Don't run it from a `\\wsl$\...` path.
-3. **Double-click `ScreenOCR.vbs`.** The blue **Aa** icon appears in the system tray, and a notification confirms the shortcuts.
+3. **Double-click `ScreenOCR.vbs`.** The blue **Aa** icon appears in the system tray, and a notification confirms the shortcut.
 4. *Optional:* right-click the tray icon and tick **Start with Windows**.
 
 If Windows warns you the first time, choose **More info → Run anyway**. The only files that run are `ScreenOCR.vbs` and `ScreenOCR.ps1`, and both are short and readable.
@@ -101,18 +75,17 @@ To stop it, right-click the tray icon and choose **Exit**.
 Edit the `param(...)` block at the top of `ScreenOCR.ps1`, then restart ScreenOCR:
 
 ```powershell
-[string]$ClaudeHotkey = 'Ctrl+Alt+L',         # exact mode (Claude)
-[string]$Hotkey = 'Ctrl+Alt+Shift+L',         # fast mode (Windows OCR)
-[string]$ClaudeModel = 'sonnet'               # or 'haiku' (lighter on usage, slightly less exact)
+[string]$Hotkey = 'Ctrl+Alt+L',
+[string]$ClaudeModel = 'sonnet'    # or 'haiku' (lighter on usage, slightly less exact)
 ```
 
-A shortcut can combine `Ctrl`, `Alt`, `Shift` and `Win` with a key, e.g. `'Win+Shift+O'`. If a shortcut is already taken by another program, ScreenOCR tells you on startup, and the tray menu still works.
+The shortcut can combine `Ctrl`, `Alt`, `Shift` and `Win` with a key, e.g. `'Win+Shift+O'`. If it's already taken by another program, ScreenOCR tells you on startup, and clicking the tray icon still works.
 
 ## Tips for terminal users
 
 - **Copying in Windows Terminal without ScreenOCR:** hold <kbd>Shift</kbd> while dragging to select text even when Claude Code, tmux or vim is capturing the mouse. Then press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> to copy.
 - **Real images** (diagrams, UI screenshots): OCR only gets the text. If Claude needs to see the actual image, copy the image file to the server and give Claude Code its path.
-- **Tables and box-drawing characters** come through in exact mode. Column padding may be slightly uneven, but all the text is there.
+- **Tables and box-drawing characters** come through. Column padding may be slightly uneven, but all the text is there.
 
 ## Troubleshooting
 
@@ -135,12 +108,6 @@ If a grab ever seems stuck, ScreenOCR retries it once with a fresh Claude instan
 </details>
 
 <details>
-<summary><b>Fast mode gets something wrong</b></summary>
-
-Use exact mode (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd>) for that grab. Fast mode is limited by the Windows OCR engine, which is tuned for normal text rather than code.
-</details>
-
-<details>
 <summary><b>The selection box doesn't line up with the screen</b></summary>
 
 This can happen with multiple monitors or display scaling. Please [open an issue](../../issues) with your monitor setup.
@@ -148,42 +115,17 @@ This can happen with multiple monitors or display scaling. Please [open an issue
 
 ## How it works under the hood
 
-<details>
-<summary><b>Fast mode</b></summary>
+ScreenOCR is a single PowerShell script with nothing to install. It uses WinForms for the tray icon, the selection overlay and the global shortcut.
 
-Uses `Windows.Media.Ocr`, the same engine behind PowerToys Text Extractor. Before reading, ScreenOCR:
-
-1. upscales the image;
-2. stretches the contrast so terminal colors (green on black, grey on blue...) become clean black on white;
-3. reads the image at two zoom levels and keeps the better result.
-
-After reading, it rebuilds rows and columns from the word positions, so tables and indented code keep their layout. Then it fixes common command mistakes, for example `Is` → `ls`, `I` → `|`, `N/` → `~/`, `2>1` → `2>&1` and typographic dashes → `-`.
-</details>
-
-<details>
-<summary><b>Exact mode</b></summary>
-
-Sends the grab to `claude -p` inside WSL, with the image inside the message, and asks Claude to transcribe it exactly. `claude -p` is Claude Code's official non-interactive mode, so it uses your normal subscription login. ScreenOCR never reads or handles your credentials.
+It sends the grab to `claude -p` inside WSL, with the image inside the message, and asks Claude to transcribe it exactly. `claude -p` uses your normal Claude Code login. ScreenOCR never reads or handles your credentials.
 
 To keep grabs fast, ScreenOCR keeps **one Claude Code instance started and waiting** in WSL, so start-up time isn't part of the wait. Each instance handles a single grab and is then replaced by a fresh one, so grabs never pile up in one conversation. It is also replaced every 30 minutes, and it shuts down when you exit ScreenOCR.
-</details>
 
-<details>
-<summary><b>Testing</b></summary>
-
-`tests/Test-ScreenOCR.ps1` checks the fast mode. It renders 34 realistic shell commands in 9 terminal styles (different fonts, sizes and color schemes, light and dark) and reports how many come back exactly right:
+You can also read an image file from the command line:
 
 ```powershell
-powershell -STA -ExecutionPolicy Bypass -File tests\Test-ScreenOCR.ps1 -ShowFailures
+powershell -ExecutionPolicy Bypass -File ScreenOCR.ps1 -OcrFile screenshot.png
 ```
-
-You can also OCR an image file from the command line:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File ScreenOCR.ps1 -OcrFile screenshot.png           # fast mode
-powershell -ExecutionPolicy Bypass -File ScreenOCR.ps1 -OcrFile screenshot.png -Claude   # exact mode
-```
-</details>
 
 ## License
 
