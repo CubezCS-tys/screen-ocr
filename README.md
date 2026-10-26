@@ -36,16 +36,25 @@ If you work in a remote terminal on Windows (SSH, WSL, tmux, Claude Code running
 </tr>
 </table>
 
-Press <kbd>Esc</kbd> or right-click to cancel a grab. The blue **Aa** icon in the system tray does the same: left-click it for a fast grab, or right-click it for both modes.
+Press <kbd>Esc</kbd> or right-click to cancel a grab. The blue **Aa** icon in the system tray does the same: left-click it to grab, or right-click it for both modes.
 
 ## Two modes
 
 <table>
 <tr>
-<th width="50%">⚡ Fast &nbsp; <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd></th>
-<th width="50%">🎯 Exact &nbsp; <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd></th>
+<th width="50%">🎯 Exact (default) &nbsp; <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd></th>
+<th width="50%">⚡ Fast, offline &nbsp; <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd></th>
 </tr>
 <tr>
+<td>
+
+- **Claude** reads it through your **Claude Code subscription**
+- About **2–4 seconds**
+- **No API key**, no per-grab cost
+- Exact in all our tests, including hashes, keys and quotes
+- The grabbed image is sent to Anthropic
+
+</td>
 <td>
 
 - Uses the **OCR engine built into Windows**
@@ -55,27 +64,18 @@ Press <kbd>Esc</kbd> or right-click to cancel a grab. The blue **Aa** icon in th
 - Can misread symbols in commands (`l`/`1`/`|`, `0`/`O`)
 
 </td>
-<td>
-
-- **Claude** reads it through your **Claude Code subscription**
-- About **6–10 seconds**
-- **No API key**, no per-grab cost
-- Exact in all our tests, including hashes, keys and quotes
-- The grabbed image is sent to Anthropic
-
-</td>
 </tr>
 </table>
 
 > [!TIP]
-> **Use exact mode for commands you're going to run.** A single wrong character breaks a command. In our tests, fast mode got 27% of shell commands exactly right (about 91% of individual characters). Exact mode got every test command right.
+> **Exact mode is the default because a single wrong character breaks a command.** In our tests, fast mode got only 27% of shell commands exactly right (about 91% of individual characters), while exact mode got every test command right. Use fast mode when you're offline, out of Claude usage, or grabbing something private.
 
 ```mermaid
 flowchart LR
     A["⌨️ Shortcut"] --> B["🖱️ Drag a box"]
     B --> C{"Which mode?"}
-    C -->|"⚡ Fast"| D["Windows OCR<br>+ terminal clean-up"]
     C -->|"🎯 Exact"| E["claude -p in WSL<br>(your subscription)"]
+    C -->|"⚡ Fast"| D["Windows OCR<br>+ terminal clean-up"]
     D --> F["📋 Clipboard"]
     E --> F
     F --> G["Paste anywhere"]
@@ -101,8 +101,8 @@ To stop it, right-click the tray icon and choose **Exit**.
 Edit the `param(...)` block at the top of `ScreenOCR.ps1`, then restart ScreenOCR:
 
 ```powershell
-[string]$Hotkey = 'Ctrl+Alt+L',               # fast mode
-[string]$ClaudeHotkey = 'Ctrl+Alt+Shift+L',   # exact mode
+[string]$ClaudeHotkey = 'Ctrl+Alt+L',         # exact mode (Claude)
+[string]$Hotkey = 'Ctrl+Alt+Shift+L',         # fast mode (Windows OCR)
 [string]$ClaudeModel = 'sonnet'               # or 'haiku' (lighter on usage, slightly less exact)
 ```
 
@@ -135,7 +135,7 @@ The message is Claude Code's own error. The usual causes:
 <details>
 <summary><b>Fast mode gets something wrong</b></summary>
 
-Use exact mode for that grab. Fast mode is limited by the Windows OCR engine, which is tuned for normal text rather than code.
+Use exact mode (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd>) for that grab. Fast mode is limited by the Windows OCR engine, which is tuned for normal text rather than code.
 </details>
 
 <details>
@@ -161,7 +161,9 @@ After reading, it rebuilds rows and columns from the word positions, so tables a
 <details>
 <summary><b>Exact mode</b></summary>
 
-Saves the grab to `%LOCALAPPDATA%\ScreenOCR\grab.png`. It then runs `claude -p` inside WSL and asks Claude to transcribe the image exactly. `claude -p` is Claude Code's official non-interactive mode, so it uses your normal subscription login. ScreenOCR never reads or handles your credentials.
+Sends the grab to `claude -p` inside WSL, with the image inside the message, and asks Claude to transcribe it exactly. `claude -p` is Claude Code's official non-interactive mode, so it uses your normal subscription login. ScreenOCR never reads or handles your credentials.
+
+To keep grabs fast, ScreenOCR keeps **one Claude Code instance started and waiting** in WSL, so start-up time isn't part of the wait. Each instance handles a single grab and is then replaced by a fresh one, so grabs never pile up in one conversation. It is also replaced every 30 minutes, and it shuts down when you exit ScreenOCR.
 </details>
 
 <details>

@@ -3,9 +3,9 @@
   inside it is copied to the clipboard.
 
   Two modes:
-    Ctrl+Alt+L        fast: the OCR engine built into Windows (~1s, can misread symbols)
-    Ctrl+Alt+Shift+L  exact: Claude reads it via `claude -p` in WSL (~6s, uses your
-                      Claude Code subscription, no API key; the grab is sent to Anthropic)
+    Ctrl+Alt+L        exact: Claude reads it via `claude -p` in WSL (uses your Claude Code
+                      subscription, no API key; the grab is sent to Anthropic)
+    Ctrl+Alt+Shift+L  fast: the OCR engine built into Windows (~1s, offline, can misread symbols)
 
   Run:   double-click ScreenOCR.vbs   (or: powershell -STA -ExecutionPolicy Bypass -File ScreenOCR.ps1)
   Use:   press a hotkey (or left-click the tray icon), drag a box. Esc / right-click cancels.
@@ -14,8 +14,8 @@
 param(
     [string]$OcrFile,
     [switch]$Claude,
-    [string]$Hotkey = 'Ctrl+Alt+L',
-    [string]$ClaudeHotkey = 'Ctrl+Alt+Shift+L',
+    [string]$ClaudeHotkey = 'Ctrl+Alt+L',
+    [string]$Hotkey = 'Ctrl+Alt+Shift+L',
     [string]$ClaudeModel = 'sonnet'
 )
 
@@ -334,45 +334,87 @@ function Get-OcrText([System.Drawing.Bitmap]$bitmap) {
 # ---------------------------------------------------------------- Claude (exact mode)
 
 # Runs Claude Code headless inside WSL, so it uses the subscription login; no API key.
-# The trimming flags skip MCP servers, sessions and slash commands to start faster.
+# Each instance answers exactly one grab, sent as a stream-json message with the image
+# inline. The app keeps one instance started ahead of time ("spare"), so Claude Code
+# and WSL start-up are already done when a grab comes in.
 $script:claudeDir = Join-Path $env:LOCALAPPDATA 'ScreenOCR'
-$script:claudePrompt = 'Read the image {0} and transcribe the text in it exactly, character for character, ' +
-    'preserving line breaks and indentation. It is usually terminal output or shell commands. ' +
-    'Output only the transcribed text, with no commentary and no code fences. If there is no text, output nothing.'
+$script:claudePrompt = 'Transcribe the text in this image exactly, character for character, preserving line breaks, ' +
+    'indentation and layout, including table borders and box-drawing characters. It is usually terminal output or ' +
+    'shell commands. Output only the transcribed text, with no commentary and no code fences. If there is no text, output nothing.'
 
 function ConvertTo-WslPath([string]$path) {
     '/mnt/' + $path.Substring(0, 1).ToLower() + ($path.Substring(2) -replace '\\', '/')
 }
 
-function Start-ClaudeOcr([System.Drawing.Bitmap]$bitmap) {
+function Start-ClaudeInstance {
     $null = New-Item -ItemType Directory -Force $script:claudeDir
-    $png = Join-Path $script:claudeDir 'grab.png'
-    $bitmap.Save($png, [System.Drawing.Imaging.ImageFormat]::Png)
-    Remove-Item (Join-Path $script:claudeDir 'claude.*') -ErrorAction SilentlyContinue
-
     # A script file sidesteps quoting through wsl.exe -> bash -> claude.
-    $script = @(
+    $runner = @(
         'export PATH="$HOME/.local/bin:$PATH"'
-        "cd '$(ConvertTo-WslPath $script:claudeDir)'"
-        "claude -p '$($script:claudePrompt -f (ConvertTo-WslPath $png))' --model $ClaudeModel --allowedTools Read " +
+        'cd "$(dirname "$1")"'
+        "exec claude -p --input-format stream-json --output-format stream-json --verbose --model $ClaudeModel " +
             "--strict-mcp-config --mcp-config '{`"mcpServers`":{}}' --no-session-persistence --disable-slash-commands " +
-            "> claude.out 2> claude.err"
+            '> "$1" 2> "$1.err"'
     ) -join "`n"
-    $scriptPath = Join-Path $script:claudeDir 'run.sh'
-    [System.IO.File]::WriteAllText($scriptPath, $script + "`n")
-    Start-Process wsl.exe -ArgumentList '-e', 'bash', '-l', (ConvertTo-WslPath $scriptPath) -WindowStyle Hidden -PassThru
+    $runnerPath = Join-Path $script:claudeDir 'run.sh'
+    [System.IO.File]::WriteAllText($runnerPath, $runner + "`n")
+
+    $out = Join-Path $script:claudeDir ('claude-{0}.jsonl' -f [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $psi = New-Object System.Diagnostics.ProcessStartInfo 'wsl.exe'
+    $psi.Arguments = '-e bash -l "{0}" "{1}"' -f (ConvertTo-WslPath $runnerPath), (ConvertTo-WslPath $out)
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.CreateNoWindow = $true
+    @{ Process = [System.Diagnostics.Process]::Start($psi); Out = $out; Started = [DateTime]::Now; SendTask = $null; InputClosed = $false }
 }
 
-# Returns the transcribed text, or throws with whatever Claude Code printed on failure.
-function Receive-ClaudeOcr($process) {
-    $out = Get-Content (Join-Path $script:claudeDir 'claude.out') -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-    $err = Get-Content (Join-Path $script:claudeDir 'claude.err') -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-    if ($process.ExitCode -ne 0) {
-        $msg = (@($err, $out) | Where-Object { $_ } | Select-Object -First 1)
-        if (-not $msg) { $msg = "claude exited with code $($process.ExitCode). Is Claude Code installed and logged in inside WSL?" }
+# Closing stdin without a message makes an idle instance exit cleanly.
+function Stop-ClaudeInstance($instance) {
+    if ($instance) { try { $instance.Process.StandardInput.Close() } catch { } }
+}
+
+# Writes the grab asynchronously (an instance still starting up may not be reading yet);
+# Complete-ClaudeSend closes stdin once the write is done, which tells Claude Code to answer and exit.
+function Send-ClaudeGrab($instance, [System.Drawing.Bitmap]$bitmap) {
+    $mem = New-Object System.IO.MemoryStream
+    $bitmap.Save($mem, [System.Drawing.Imaging.ImageFormat]::Png)
+    # The API caps images at 5 MB; only huge full-screen grabs get near that.
+    if ($mem.Length -gt 3.5MB) {
+        $f = [Math]::Sqrt(3.5MB / $mem.Length) * 0.9
+        $small = New-Object System.Drawing.Bitmap $bitmap, ([int]($bitmap.Width * $f)), ([int]($bitmap.Height * $f))
+        $mem = New-Object System.IO.MemoryStream
+        $small.Save($mem, [System.Drawing.Imaging.ImageFormat]::Png)
+        $small.Dispose()
+    }
+    # Built by hand: ConvertTo-Json in PowerShell 5.1 is slow on multi-megabyte strings.
+    $json = '{"type":"user","message":{"role":"user","content":[' +
+        '{"type":"image","source":{"type":"base64","media_type":"image/png","data":"' + [Convert]::ToBase64String($mem.ToArray()) + '"}},' +
+        '{"type":"text","text":' + ($script:claudePrompt | ConvertTo-Json) + '}]}}' + "`n"
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+    $instance.SendTask = $instance.Process.StandardInput.BaseStream.WriteAsync($bytes, 0, $bytes.Length)
+}
+
+function Complete-ClaudeSend($instance) {
+    if ($instance.InputClosed -or -not $instance.SendTask.IsCompleted) { return }
+    Stop-ClaudeInstance $instance
+    $instance.InputClosed = $true
+}
+
+# Returns the transcribed text, or throws with whatever Claude Code reported on failure.
+function Receive-ClaudeResult($instance) {
+    $lines = @(Get-Content $instance.Out -Encoding UTF8 -ErrorAction SilentlyContinue)
+    $err = Get-Content "$($instance.Out).err" -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    Remove-Item $instance.Out, "$($instance.Out).err" -ErrorAction SilentlyContinue
+
+    $resultLine = $lines | Where-Object { $_ -like '*"type":"result"*' } | Select-Object -Last 1
+    if (-not $resultLine) {
+        $msg = @($err, ($lines -join "`n")) | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1
+        if (-not $msg) { $msg = "Claude Code exited without an answer (code $($instance.Process.ExitCode)). Is it installed and logged in inside WSL?" }
         throw $msg.Trim()
     }
-    if ($out) { $out.TrimEnd() -replace '\r?\n', "`r`n" } else { '' }
+    $result = $resultLine | ConvertFrom-Json
+    if ($result.is_error -or $result.subtype -ne 'success') { throw ("Claude Code: {0} {1}" -f $result.result, $result.subtype).Trim() }
+    ([string]$result.result).Trim("`r", "`n") -replace '\r?\n', "`r`n"
 }
 
 # Dot-sourced (e.g. by tests/Test-ScreenOCR.ps1): load the OCR functions only.
@@ -381,9 +423,12 @@ if ($MyInvocation.InvocationName -eq '.') { return }
 if ($OcrFile) {
     $bmp = New-Object System.Drawing.Bitmap (Resolve-Path $OcrFile).Path
     if ($Claude) {
-        $proc = Start-ClaudeOcr $bmp
-        $proc.WaitForExit()
-        Receive-ClaudeOcr $proc
+        $instance = Start-ClaudeInstance
+        Send-ClaudeGrab $instance $bmp
+        $null = $instance.SendTask.Wait(60000)
+        Complete-ClaudeSend $instance
+        $instance.Process.WaitForExit()
+        Receive-ClaudeResult $instance
     } else {
         Get-OcrText $bmp
     }
@@ -442,7 +487,7 @@ $launcher = Join-Path $PSScriptRoot 'ScreenOCR.vbs'
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Icon = New-TrayIcon
-$tray.Text = "ScreenOCR - $Hotkey fast, $ClaudeHotkey exact"
+$tray.Text = "ScreenOCR - $ClaudeHotkey exact, $Hotkey fast"
 $tray.Visible = $true
 
 function Show-Copied([string]$text) {
@@ -455,23 +500,49 @@ function Show-Copied([string]$text) {
     $tray.ShowBalloonTip(2000, 'Copied to clipboard', $preview, 'Info')
 }
 
-# Claude takes a few seconds, so poll for it from a timer instead of blocking the UI.
+# A warm Claude Code instance waiting for the next grab; replaced after every grab
+# and every 30 minutes, so its login and settings never go stale.
+$script:spare = $null
+function Get-ClaudeInstance {
+    $instance = $script:spare
+    $script:spare = $null
+    if (-not $instance -or $instance.Process.HasExited) { $instance = Start-ClaudeInstance }
+    $instance
+}
+function Reset-ClaudeSpare {
+    Stop-ClaudeInstance $script:spare
+    $script:spare = Start-ClaudeInstance
+}
+
+# Claude takes a couple of seconds, so poll for it from a timer instead of blocking the UI.
 $script:claudeJob = $null
 $claudeTimer = New-Object System.Windows.Forms.Timer
-$claudeTimer.Interval = 250
+$claudeTimer.Interval = 100
 $claudeTimer.add_Tick({
     $job = $script:claudeJob
+    Complete-ClaudeSend $job
     if (-not $job.Process.HasExited) {
-        if (([DateTime]::Now - $job.Started).TotalSeconds -lt 90) { return }
+        if (([DateTime]::Now - $job.SentAt).TotalSeconds -lt 90) { return }
         try { $job.Process.Kill() } catch { }
         $claudeTimer.Stop(); $script:claudeJob = $null; $script:busy = $false
         $tray.ShowBalloonTip(4000, 'ScreenOCR error', 'Claude took longer than 90 seconds; gave up.', 'Error')
         return
     }
     $claudeTimer.Stop(); $script:claudeJob = $null
-    try { Show-Copied (Receive-ClaudeOcr $job.Process) }
+    try { Show-Copied (Receive-ClaudeResult $job) }
     catch { $tray.ShowBalloonTip(6000, 'ScreenOCR (Claude) error', $_.Exception.Message, 'Error') }
-    finally { $script:busy = $false }
+    finally {
+        $script:busy = $false
+        try { Reset-ClaudeSpare } catch { }
+    }
+})
+
+$recycleTimer = New-Object System.Windows.Forms.Timer
+$recycleTimer.Interval = 60000
+$recycleTimer.add_Tick({
+    if (-not $script:busy -and $script:spare -and ([DateTime]::Now - $script:spare.Started).TotalMinutes -gt 30) {
+        try { Reset-ClaudeSpare } catch { }
+    }
 })
 
 $script:busy = $false
@@ -487,7 +558,10 @@ function Start-Capture([switch]$UseClaude) {
         try {
             if ($selector.ShowDialog() -ne 'OK') { return }
             if ($UseClaude) {
-                $script:claudeJob = @{ Process = Start-ClaudeOcr $selector.Result; Started = [DateTime]::Now }
+                $job = Get-ClaudeInstance
+                Send-ClaudeGrab $job $selector.Result
+                $job.SentAt = [DateTime]::Now
+                $script:claudeJob = $job
                 $async = $true
                 $claudeTimer.Start()
                 $tray.ShowBalloonTip(2000, 'ScreenOCR', 'Reading with Claude...', 'Info')
@@ -506,10 +580,10 @@ function Start-Capture([switch]$UseClaude) {
 }
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
-$captureItem = $menu.Items.Add("Grab text - fast   ($Hotkey)")
-$captureItem.add_Click({ Start-Capture })
 $claudeItem = $menu.Items.Add("Grab text - exact, Claude   ($ClaudeHotkey)")
 $claudeItem.add_Click({ Start-Capture -UseClaude })
+$captureItem = $menu.Items.Add("Grab text - fast, offline   ($Hotkey)")
+$captureItem.add_Click({ Start-Capture })
 $startupItem = New-Object System.Windows.Forms.ToolStripMenuItem 'Start with Windows'
 $startupItem.Checked = Test-Path $startupLink
 $startupItem.add_Click({
@@ -530,10 +604,11 @@ $exitItem = $menu.Items.Add('Exit')
 $exitItem.add_Click({
     $tray.Visible = $false
     foreach ($w in $script:hotkeyWindows) { $w.Dispose() }
+    Stop-ClaudeInstance $script:spare
     [System.Windows.Forms.Application]::Exit()
 })
 $tray.ContextMenuStrip = $menu
-$tray.add_MouseClick({ param($s, $e) if ($e.Button -eq 'Left') { Start-Capture } })
+$tray.add_MouseClick({ param($s, $e) if ($e.Button -eq 'Left') { Start-Capture -UseClaude } })
 
 $script:hotkeyWindows = @()
 $failed = @()
@@ -550,8 +625,12 @@ foreach ($hk in @(@($Hotkey, { Start-Capture }), @($ClaudeHotkey, { Start-Captur
 if ($failed) {
     $tray.ShowBalloonTip(5000, 'ScreenOCR', "Couldn't register $($failed -join ' / ') (in use by another program). Use the tray icon menu instead.", 'Warning')
 } else {
-    $tray.ShowBalloonTip(3000, 'ScreenOCR is running', "$Hotkey = fast grab, $ClaudeHotkey = exact grab with Claude.", 'Info')
+    $tray.ShowBalloonTip(3000, 'ScreenOCR is running', "$ClaudeHotkey = exact grab with Claude, $Hotkey = fast offline grab.", 'Info')
 }
+
+Remove-Item (Join-Path $script:claudeDir 'claude-*') -ErrorAction SilentlyContinue
+try { Reset-ClaudeSpare } catch { }
+$recycleTimer.Start()
 
 [System.Windows.Forms.Application]::Run()
 $tray.Dispose()
