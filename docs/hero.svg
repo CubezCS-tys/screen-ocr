@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="330" viewBox="0 0 960 330" font-family="Cascadia Mono, Consolas, 'DejaVu Sans Mono', monospace">
+  <title>ScreenOCR: drag a box over text in a terminal, it is copied to the clipboard and pasted into Claude Code</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#11151c"/>
+      <stop offset="1" stop-color="#1b2230"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4fb3ff"/>
+    </marker>
+    <clipPath id="term"><rect x="30" y="40" width="470" height="250" rx="10"/></clipPath>
+  </defs>
+
+  <rect width="960" height="330" rx="16" fill="url(#bg)"/>
+
+  <!-- terminal window -->
+  <g clip-path="url(#term)">
+    <rect x="30" y="40" width="470" height="250" fill="#0c0c0c"/>
+    <rect x="30" y="40" width="470" height="30" fill="#1f1f1f"/>
+    <circle cx="50" cy="55" r="5" fill="#ff5f57"/><circle cx="68" cy="55" r="5" fill="#febc2e"/><circle cx="86" cy="55" r="5" fill="#28c840"/>
+    <text x="265" y="59" fill="#8b8b8b" font-size="12" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif">ssh root@server</text>
+
+    <g font-size="13.5">
+      <text x="46" y="100" fill="#13a10e">root@server<tspan fill="#cccccc">:</tspan><tspan fill="#3b78ff">~</tspan><tspan fill="#cccccc">$ sudo ufw status</tspan></text>
+      <text x="46" y="124" fill="#cccccc">22/tcp&#160;&#160;&#160;&#160;&#160;&#160;&#160;ALLOW&#160;&#160;&#160;&#160;Anywhere</text>
+      <text x="46" y="148" fill="#cccccc">443/tcp&#160;&#160;&#160;&#160;&#160;&#160;ALLOW&#160;&#160;&#160;&#160;Anywhere</text>
+      <text x="46" y="172" fill="#cccccc">3002/tcp&#160;&#160;&#160;&#160;&#160;DENY&#160;&#160;&#160;&#160;&#160;Anywhere</text>
+      <text x="46" y="208" fill="#cccccc">To start the web server, run:</text>
+      <text x="46" y="236" fill="#cccccc">&#160;&#160;&#160;&#160;docker run -d -p 8080:80 --name web nginx</text>
+      <text x="46" y="268" fill="#cccccc">█</text>
+    </g>
+
+    <!-- dimmed overlay with a cut-out for the selection -->
+    <path fill="#000" fill-opacity="0.55" fill-rule="evenodd"
+          d="M30,40 h470 v250 h-470 z M70,218 h346 v26 h-346 z"/>
+  </g>
+  <rect x="70" y="218" width="346" height="26" fill="none" stroke="#00aaff" stroke-width="2"/>
+  <!-- crosshair cursor -->
+  <g stroke="#ffffff" stroke-width="2" stroke-linecap="round">
+    <line x1="416" y1="234" x2="416" y2="254"/>
+    <line x1="406" y1="244" x2="426" y2="244"/>
+  </g>
+  <!-- hotkey hint -->
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#e6edf3">
+    <rect x="182" y="300" width="44" height="22" rx="5" fill="#2d333b" stroke="#57606a"/><text x="204" y="315" text-anchor="middle">Ctrl</text>
+    <text x="234" y="315" fill="#8b949e" text-anchor="middle">+</text>
+    <rect x="242" y="300" width="38" height="22" rx="5" fill="#2d333b" stroke="#57606a"/><text x="261" y="315" text-anchor="middle">Alt</text>
+    <text x="288" y="315" fill="#8b949e" text-anchor="middle">+</text>
+    <rect x="296" y="300" width="26" height="22" rx="5" fill="#2d333b" stroke="#57606a"/><text x="309" y="315" text-anchor="middle">L</text>
+    <text x="332" y="315" fill="#8b949e" font-weight="400">then drag a box</text>
+  </g>
+
+  <!-- arrow terminal -> toast -->
+  <path d="M422,212 C480,130 500,95 560,95" fill="none" stroke="#4fb3ff" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- notification toast -->
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <rect x="568" y="40" width="362" height="104" rx="10" fill="#2b2b2b" stroke="#3d3d3d"/>
+    <rect x="584" y="56" width="26" height="26" rx="5" fill="#0078d7"/>
+    <text x="597" y="74" fill="#fff" font-size="11" font-weight="700" text-anchor="middle">Aa</text>
+    <text x="620" y="66" fill="#ffffff" font-size="14" font-weight="600">Copied to clipboard</text>
+    <text x="620" y="84" fill="#9da5b4" font-size="11">ScreenOCR</text>
+    <text x="584" y="118" fill="#d4d4d4" font-size="12.5" font-family="Cascadia Mono, Consolas, monospace">docker run -d -p 8080:80 --name web nginx</text>
+  </g>
+
+  <!-- arrow toast -> paste -->
+  <path d="M749,150 L749,178" fill="none" stroke="#4fb3ff" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="762" y="169" fill="#8b949e" font-size="12" font-family="Segoe UI, Helvetica, Arial, sans-serif">Ctrl+Shift+V</text>
+
+  <!-- pasted into Claude Code -->
+  <rect x="568" y="186" width="362" height="104" rx="10" fill="#0c0c0c" stroke="#3d3d3d"/>
+  <text x="584" y="210" fill="#d97757" font-size="12" font-weight="700">✻ Claude Code</text>
+  <rect x="580" y="228" width="338" height="40" rx="6" fill="none" stroke="#5c5c5c"/>
+  <text x="592" y="253" fill="#d4d4d4" font-size="12">&gt; docker run -d -p 8080:80 --name web nginx█</text>
+</svg>
