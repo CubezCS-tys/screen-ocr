@@ -130,6 +130,8 @@ The message is Claude Code's own error. The usual causes:
 - Claude Code isn't installed in your default WSL distro.
 - You're logged out. Run `claude` in WSL once to log in.
 - You've hit your plan's usage limit.
+
+If a grab ever seems stuck, ScreenOCR retries it once with a fresh Claude instance after 15 seconds. Every step is logged to `%LOCALAPPDATA%\ScreenOCR\screenocr.log`. Please attach that file if you open an issue.
 </details>
 
 <details>

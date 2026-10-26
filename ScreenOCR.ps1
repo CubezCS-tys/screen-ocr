@@ -16,7 +16,8 @@ param(
     [switch]$Claude,
     [string]$ClaudeHotkey = 'Ctrl+Alt+L',
     [string]$Hotkey = 'Ctrl+Alt+Shift+L',
-    [string]$ClaudeModel = 'sonnet'
+    [string]$ClaudeModel = 'sonnet',
+    [string]$SelfTest           # run the tray app and do one Claude grab of this image file
 )
 
 $ErrorActionPreference = 'Stop'
@@ -342,6 +343,15 @@ $script:claudePrompt = 'Transcribe the text in this image exactly, character for
     'indentation and layout, including table borders and box-drawing characters. It is usually terminal output or ' +
     'shell commands. Output only the transcribed text, with no commentary and no code fences. If there is no text, output nothing.'
 
+# Troubleshooting log: %LOCALAPPDATA%\ScreenOCR\screenocr.log (trimmed when it passes 256 KB).
+function Write-Log([string]$message) {
+    try {
+        $log = Join-Path $script:claudeDir 'screenocr.log'
+        if ((Test-Path $log) -and (Get-Item $log).Length -gt 256KB) { Remove-Item $log }
+        Add-Content $log ('{0:yyyy-MM-dd HH:mm:ss.fff}  {1}' -f (Get-Date), $message) -Encoding UTF8
+    } catch { }
+}
+
 function ConvertTo-WslPath([string]$path) {
     '/mnt/' + $path.Substring(0, 1).ToLower() + ($path.Substring(2) -replace '\\', '/')
 }
@@ -365,7 +375,9 @@ function Start-ClaudeInstance {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
     $psi.CreateNoWindow = $true
-    @{ Process = [System.Diagnostics.Process]::Start($psi); Out = $out; Started = [DateTime]::Now; SendTask = $null; InputClosed = $false }
+    $instance = @{ Process = [System.Diagnostics.Process]::Start($psi); Out = $out; Started = [DateTime]::Now; SendTask = $null; InputClosed = $false }
+    Write-Log "claude instance started: $(Split-Path $out -Leaf)"
+    $instance
 }
 
 # Closing stdin without a message makes an idle instance exit cleanly.
@@ -390,14 +402,21 @@ function Send-ClaudeGrab($instance, [System.Drawing.Bitmap]$bitmap) {
     $json = '{"type":"user","message":{"role":"user","content":[' +
         '{"type":"image","source":{"type":"base64","media_type":"image/png","data":"' + [Convert]::ToBase64String($mem.ToArray()) + '"}},' +
         '{"type":"text","text":' + ($script:claudePrompt | ConvertTo-Json) + '}]}}' + "`n"
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+    Send-ClaudePayload $instance ([System.Text.Encoding]::UTF8.GetBytes($json))
+}
+
+function Send-ClaudePayload($instance, [byte[]]$bytes) {
+    $instance.Payload = $bytes
+    $instance.SentAt = [DateTime]::Now
     $instance.SendTask = $instance.Process.StandardInput.BaseStream.WriteAsync($bytes, 0, $bytes.Length)
+    Write-Log "grab sent to $(Split-Path $instance.Out -Leaf): $($bytes.Length) bytes"
 }
 
 function Complete-ClaudeSend($instance) {
     if ($instance.InputClosed -or -not $instance.SendTask.IsCompleted) { return }
     Stop-ClaudeInstance $instance
     $instance.InputClosed = $true
+    Write-Log "input closed: $(Split-Path $instance.Out -Leaf) (send $($instance.SendTask.Status))"
 }
 
 # Returns the transcribed text, or throws with whatever Claude Code reported on failure.
@@ -496,6 +515,7 @@ function Show-Copied([string]$text) {
         return
     }
     Set-ClipboardText $text
+    Write-Log "copied $($text.Length) chars"
     $preview = if ($text.Length -gt 120) { $text.Substring(0, 120) + '...' } else { $text }
     $tray.ShowBalloonTip(2000, 'Copied to clipboard', $preview, 'Info')
 }
@@ -519,10 +539,23 @@ $script:claudeJob = $null
 $claudeTimer = New-Object System.Windows.Forms.Timer
 $claudeTimer.Interval = 100
 $claudeTimer.add_Tick({
+  try {
     $job = $script:claudeJob
     Complete-ClaudeSend $job
     if (-not $job.Process.HasExited) {
-        if (([DateTime]::Now - $job.SentAt).TotalSeconds -lt 90) { return }
+        $waited = ([DateTime]::Now - $job.SentAt).TotalSeconds
+        # Claude starts streaming within a few seconds. If nothing has arrived after 15 s the
+        # instance is stuck (seen once in the wild), so resend the grab to a fresh one, once.
+        if ($waited -gt 15 -and -not $job.Retried -and (Get-Item $job.Out -ErrorAction SilentlyContinue).Length -lt 16) {
+            Write-Log "no answer after 15 s from $(Split-Path $job.Out -Leaf) (input closed: $($job.InputClosed), send $($job.SendTask.Status)); retrying with a fresh instance"
+            try { $job.Process.Kill() } catch { }
+            $retry = Start-ClaudeInstance
+            $retry.Retried = $true
+            Send-ClaudePayload $retry $job.Payload
+            $script:claudeJob = $retry
+            return
+        }
+        if ($waited -lt 90) { return }
         try { $job.Process.Kill() } catch { }
         $claudeTimer.Stop(); $script:claudeJob = $null; $script:busy = $false
         $tray.ShowBalloonTip(4000, 'ScreenOCR error', 'Claude took longer than 90 seconds; gave up.', 'Error')
@@ -530,11 +563,19 @@ $claudeTimer.add_Tick({
     }
     $claudeTimer.Stop(); $script:claudeJob = $null
     try { Show-Copied (Receive-ClaudeResult $job) }
-    catch { $tray.ShowBalloonTip(6000, 'ScreenOCR (Claude) error', $_.Exception.Message, 'Error') }
+    catch {
+        Write-Log "claude error: $($_.Exception.Message)"
+        $tray.ShowBalloonTip(6000, 'ScreenOCR (Claude) error', $_.Exception.Message, 'Error')
+    }
     finally {
         $script:busy = $false
         try { Reset-ClaudeSpare } catch { }
     }
+  } catch {
+    Write-Log "timer error: $($_ | Out-String)"
+    $claudeTimer.Stop(); $script:claudeJob = $null; $script:busy = $false
+    $tray.ShowBalloonTip(6000, 'ScreenOCR error', $_.Exception.Message, 'Error')
+  }
 })
 
 $recycleTimer = New-Object System.Windows.Forms.Timer
@@ -546,7 +587,7 @@ $recycleTimer.add_Tick({
 })
 
 $script:busy = $false
-function Start-Capture([switch]$UseClaude) {
+function Start-Capture([switch]$UseClaude, [System.Drawing.Bitmap]$Image) {
     if ($script:busy) {
         $tray.ShowBalloonTip(1500, 'ScreenOCR', 'Still reading the last grab...', 'Info')
         return
@@ -556,11 +597,11 @@ function Start-Capture([switch]$UseClaude) {
     try {
         $selector = New-Object RegionSelector
         try {
-            if ($selector.ShowDialog() -ne 'OK') { return }
+            if ($Image) { $selector.Result = $Image }
+            elseif ($selector.ShowDialog() -ne 'OK') { return }
             if ($UseClaude) {
                 $job = Get-ClaudeInstance
                 Send-ClaudeGrab $job $selector.Result
-                $job.SentAt = [DateTime]::Now
                 $script:claudeJob = $job
                 $async = $true
                 $claudeTimer.Start()
@@ -573,6 +614,7 @@ function Start-Capture([switch]$UseClaude) {
         if (-not $async) { Show-Copied $text }
     } catch {
         $async = $false
+        Write-Log "capture error: $($_ | Out-String)"
         $tray.ShowBalloonTip(4000, 'ScreenOCR error', $_.Exception.Message, 'Error')
     } finally {
         if (-not $async) { $script:busy = $false }
@@ -631,6 +673,18 @@ if ($failed) {
 Remove-Item (Join-Path $script:claudeDir 'claude-*') -ErrorAction SilentlyContinue
 try { Reset-ClaudeSpare } catch { }
 $recycleTimer.Start()
+Write-Log "ScreenOCR started"
+
+if ($SelfTest) {
+    $selfTestTimer = New-Object System.Windows.Forms.Timer
+    $selfTestTimer.Interval = 8000
+    $selfTestTimer.add_Tick({
+        $selfTestTimer.Stop()
+        Write-Log "self-test grab: $SelfTest"
+        Start-Capture -UseClaude -Image (New-Object System.Drawing.Bitmap (Resolve-Path $SelfTest).Path)
+    })
+    $selfTestTimer.Start()
+}
 
 [System.Windows.Forms.Application]::Run()
 $tray.Dispose()
